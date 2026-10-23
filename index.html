@@ -1,0 +1,465 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>툴킷</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#f7f8fb;color:#242a35;font-family:Arial,"Malgun Gothic",sans-serif}
+button,input,textarea,select{font:inherit}
+button{cursor:pointer}
+#workspace{height:calc(100dvh - 78px);overflow:auto;padding:28px;display:flex;justify-content:center;align-items:flex-start}
+.panel{width:min(800px,100%);background:white;border:1px solid #e9ebf0;border-radius:18px;box-shadow:0 12px 35px #1a27400c;padding:28px}
+.panel h2{margin:0 0 24px;font-size:23px}
+#dock{position:fixed;bottom:0;left:0;right:0;height:78px;background:#ffffffee;backdrop-filter:blur(18px);border-top:1px solid #e9ebf0;display:flex;align-items:center;justify-content:center;gap:5px;padding:9px 12px;overflow-x:auto}
+#dock button{flex:0 0 auto;border:0;background:transparent;color:#657082;border-radius:12px;padding:10px 11px;font-size:13px;white-space:nowrap}
+#dock button:hover{background:#f1f3f8;color:#1e293b}
+#dock button.active{background:#e8efff;color:#2758c7;font-weight:700}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:6px;flex:1;min-width:120px}
+input:not([type=checkbox]),select,textarea{border:1px solid #dce1ea;border-radius:10px;padding:12px;min-width:0;background:white;color:#242a35}
+textarea{width:100%;min-height:260px;resize:vertical;line-height:1.6}
+.action{border:0;background:#315fe4;color:white;padding:12px 19px;border-radius:10px}
+.secondary{background:#edf0f6;color:#283348}
+.display{font-size:clamp(64px,12vw,120px);font-weight:700;text-align:center;letter-spacing:-3px;margin:30px 0;font-variant-numeric:tabular-nums}
+.sub{color:#6e7788;font-size:13px}
+.history{border-top:1px solid #eef0f3;margin-top:25px;padding-top:15px;line-height:2;overflow-wrap:anywhere}
+#board{border:1px solid #e4e7ed;outline:none;border-radius:12px;background:white;min-height:60vh;padding:22px;font-size:64px;line-height:1.4;white-space:pre-wrap;overflow-wrap:anywhere}
+#boardMenu{position:fixed;display:none;z-index:10;background:white;box-shadow:0 8px 30px #0002;border:1px solid #e5e7eb;border-radius:12px;padding:15px;width:230px}
+#boardMenu label{display:block;margin:8px 0;font-size:13px}
+#boardMenu input,#boardMenu select{width:100%}
+.note{background:#fff5cb;border:1px solid #f0e3a3;border-radius:12px;padding:12px;width:230px;display:inline-flex;flex-direction:column;gap:10px;margin:5px}
+.note textarea{background:transparent;border:0;min-height:150px;padding:3px;outline:none}
+.keys{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;max-width:380px;margin:auto}
+.keys button{padding:17px 5px;border:0;background:#f1f3f7;border-radius:10px;font-size:20px}
+.keys button:hover{background:#e1e8f8}
+#calcOut{max-width:380px;margin:15px auto;text-align:right;font-size:45px;overflow:auto}
+@media(max-width:550px){
+#workspace{padding:12px}
+.panel{padding:18px}
+#dock{justify-content:flex-start}
+.display{font-size:60px}
+}
+</style>
+</head>
+<body>
+<main id="workspace"></main>
+<nav id="dock" aria-label="도구 메뉴"></nav>
+
+<div id="boardMenu">
+<label>글씨 크기<input type="number" id="boardSize" value="64" min="12" max="180"></label>
+<label>글씨 색상<input type="color" id="boardColor" value="#000000"></label>
+<label>굵기<select id="boardWeight"><option value="400">보통</option><option value="700">굵게</option></select></label>
+<label>정렬<select id="boardAlign"><option value="left">왼쪽</option><option value="center">가운데</option><option value="right">오른쪽</option></select></label>
+</div>
+
+<script>
+const $=id=>document.getElementById(id);
+const work=$('workspace');
+const tools=[
+['timer','타이머'],
+['board','판서'],
+['pomo','포모도로'],
+['random','랜덤 뽑기'],
+['stopwatch','스톱워치'],
+['memo','메모장'],
+['sticky','스티키 노트'],
+['calc','계산기'],
+['clock','디지털 시계'],
+['qr','QR 코드']
+];
+
+let active='',interval=null,started=0,remaining=0,elapsed=0,running=false,drawn=[];
+let notes=JSON.parse(localStorage.getItem('tk_notes')||'[]');
+let calcExpr='';
+
+function esc(s){
+return String(s).replace(/[&<>"']/g,c=>({
+'&':'&amp;','<':'&lt;','>':'&gt;',
+'"':'&quot;',"'":'&#39;'
+}[c]));
+}
+
+function panel(title,body){
+return `<section class="panel"><h2>${title}</h2>${body}</section>`;
+}
+
+function btn(label,fn,extra=''){
+return `<button class="action ${extra}" onclick="${fn}">${label}</button>`;
+}
+
+function stop(){
+clearInterval(interval);
+interval=null;
+running=false;
+}
+
+function selectTool(id){
+stop();
+active=id;
+document.querySelectorAll('#dock button').forEach(b=>
+b.classList.toggle('active',b.dataset.tool===id)
+);
+$('boardMenu').style.display='none';
+
+if(id==='timer')
+work.innerHTML=panel('타이머',`
+<div class="row">
+<label class="field">분<input type="number" id="mins" min="0" max="999" value="5"></label>
+<label class="field">초<input type="number" id="secs" min="0" max="59" value="0"></label>
+</div>
+<div class="display" id="timeOut">05:00</div>
+<div class="row">
+${btn('시작 / 일시정지','timerToggle()')}
+${btn('초기화','timerReset()','secondary')}
+</div>`);
+
+if(id==='pomo')
+work.innerHTML=panel('포모도로',`
+<div class="row">
+<label class="field">모드
+<select id="mode" onchange="pomoReset()">
+<option value="25">집중 25분</option>
+<option value="5">짧은 휴식 5분</option>
+<option value="15">긴 휴식 15분</option>
+</select></label>
+</div>
+<div class="display" id="timeOut">25:00</div>
+<div class="row">
+${btn('시작 / 일시정지','timerToggle()')}
+${btn('초기화','pomoReset()','secondary')}
+</div>`);
+
+if(id==='board')
+work.innerHTML=panel('판서',`
+<p class="sub">키보드로 입력하세요. 우클릭하면 글씨 설정이 열립니다.</p>
+<div id="board" contenteditable="true" spellcheck="false"></div>
+<div class="row" style="margin-top:14px">
+${btn('텍스트 저장','saveBoard()')}
+${btn('전체 지우기','clearBoard()','secondary')}
+</div>`);
+
+if(id==='random')
+work.innerHTML=panel('랜덤 뽑기',`
+<div class="row">
+<label class="field">시작 번호<input id="rMin" type="number" value="1"></label>
+<label class="field">끝 번호<input id="rMax" type="number" value="30"></label>
+</div>
+<p><label><input type="checkbox" id="rUnique" checked> 중복 없이 뽑기</label></p>
+<div class="display" id="rOut">?</div>
+<div class="row">
+${btn('뽑기','randomPick()')}
+${btn('초기화','randomReset()','secondary')}
+</div>
+<div class="history" id="rHistory">뽑힌 번호: 없음</div>`);
+
+if(id==='stopwatch')
+work.innerHTML=panel('스톱워치',`
+<div class="display" id="swOut">00:00.00</div>
+<div class="row">
+${btn('시작 / 일시정지','swToggle()')}
+${btn('랩 기록','swLap()','secondary')}
+${btn('초기화','swReset()','secondary')}
+</div>
+<div class="history" id="laps"></div>`);
+
+if(id==='memo')
+work.innerHTML=panel('메모장',`
+<textarea id="memoText" placeholder="내용을 입력하세요.">${esc(localStorage.getItem('tk_memo')||'')}</textarea>
+<div class="row">
+<button class="action" onclick="saveMemo()">텍스트 저장</button>
+${btn('내용 지우기','memoClear()','secondary')}
+<span class="sub">입력 내용은 이 브라우저에 자동 저장됩니다.</span>
+</div>`);
+
+if(id==='sticky')
+work.innerHTML=panel('스티키 노트',`
+<div class="row">${btn('새 메모','addNote()')}</div>
+<div id="notes" style="margin-top:20px"></div>`);
+
+if(id==='calc')
+work.innerHTML=panel('계산기',`
+<div id="calcOut">0</div>
+<div class="keys">
+${['7','8','9','÷','4','5','6','×','1','2','3','−','C','0','.','+','(',')','⌫','='].map(x=>
+`<button onclick="calcKey('${x}')">${x}</button>`
+).join('')}
+</div>`);
+
+if(id==='clock')
+work.innerHTML=panel('디지털 시계',`
+<div class="display" id="clockOut"></div>
+<p id="dateOut" style="text-align:center;color:#697487"></p>`);
+
+if(id==='qr')
+work.innerHTML=panel('QR 코드',`
+<label class="field">주소 또는 텍스트
+<input id="qrInput" placeholder="https://example.com">
+</label>
+<div class="row" style="margin-top:16px">
+${btn('QR 코드 생성','makeQR()')}
+</div>
+<div id="qrOut" style="margin-top:25px"></div>
+<p class="sub">QR 코드 생성에는 인터넷 연결이 필요합니다.</p>`);
+
+if(id==='board'){
+$('board').innerText=localStorage.getItem('tk_board')||'';
+$('board').focus();
+}
+if(id==='sticky')renderNotes();
+if(id==='clock'){
+updateClock();
+interval=setInterval(updateClock,1000);
+}
+if(id==='timer')timerReset();
+if(id==='pomo')pomoReset();
+}
+
+tools.forEach(([id,name])=>{
+let b=document.createElement('button');
+b.textContent=name;
+b.dataset.tool=id;
+b.onclick=()=>selectTool(id);
+$('dock').appendChild(b);
+});
+
+function fmt(s){
+return `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+}
+
+function timerReset(){
+stop();
+remaining=Math.max(0,Number($('mins').value)||0)*60+
+Math.max(0,Math.min(59,Number($('secs').value)||0));
+$('timeOut').textContent=fmt(remaining);
+}
+
+function pomoReset(){
+stop();
+remaining=Number($('mode').value)*60;
+$('timeOut').textContent=fmt(remaining);
+}
+
+function timerToggle(){
+if(running){
+remaining=Math.max(0,Math.ceil((started-Date.now())/1000));
+stop();
+return;
+}
+if(remaining<=0)return;
+running=true;
+started=Date.now()+remaining*1000;
+interval=setInterval(()=>{
+remaining=Math.max(0,Math.ceil((started-Date.now())/1000));
+$('timeOut').textContent=fmt(remaining);
+if(!remaining){
+stop();
+alert('시간이 종료되었습니다.');
+}
+},100);
+}
+
+function randomReset(){
+drawn=[];
+$('rOut').textContent='?';
+$('rHistory').textContent='뽑힌 번호: 없음';
+}
+
+function randomPick(){
+let a=Number($('rMin').value),b=Number($('rMax').value);
+if(!Number.isSafeInteger(a)||!Number.isSafeInteger(b)||a>b||b-a>100000){
+alert('올바른 범위를 입력하세요. (최대 100,001개)');
+return;
+}
+let pool=Array.from({length:b-a+1},(_,i)=>a+i)
+.filter(n=>!$('rUnique').checked||!drawn.includes(n));
+if(!pool.length){
+alert('모든 번호를 뽑았습니다.');
+return;
+}
+let n=pool[Math.floor(Math.random()*pool.length)];
+drawn.push(n);
+$('rOut').textContent=n;
+$('rHistory').textContent='뽑힌 번호: '+drawn.join(', ');
+}
+
+function swFmt(ms){
+let cs=Math.floor(ms/10)%100;
+let s=Math.floor(ms/1000)%60;
+let m=Math.floor(ms/60000);
+return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}.${String(cs).padStart(2,'0')}`;
+}
+
+function swToggle(){
+if(running){
+elapsed=Date.now()-started;
+stop();
+}else{
+running=true;
+started=Date.now()-elapsed;
+interval=setInterval(()=>{
+$('swOut').textContent=swFmt(Date.now()-started);
+},40);
+}
+}
+
+function swLap(){
+let ms=running?Date.now()-started:elapsed;
+if(ms>0){
+let d=document.createElement('div');
+d.textContent='랩 '+($('laps').children.length+1)+' — '+swFmt(ms);
+$('laps').prepend(d);
+}
+}
+
+function swReset(){
+stop();
+elapsed=0;
+$('swOut').textContent='00:00.00';
+$('laps').innerHTML='';
+}
+
+function saveText(content,name){
+let u=URL.createObjectURL(new Blob([content],{type:'text/plain;charset=utf-8'}));
+let a=document.createElement('a');
+a.href=u;
+a.download=name;
+a.click();
+setTimeout(()=>URL.revokeObjectURL(u),1000);
+}
+
+function saveMemo(){
+saveText($('memoText').value,'메모.txt');
+}
+
+function saveBoard(){
+saveText($('board').innerText,'판서.txt');
+}
+
+function clearBoard(){
+if(confirm('내용을 모두 지울까요?')){
+$('board').innerText='';
+localStorage.removeItem('tk_board');
+}
+}
+
+function memoClear(){
+if(confirm('메모를 지울까요?')){
+$('memoText').value='';
+localStorage.removeItem('tk_memo');
+}
+}
+
+function persistNotes(){
+localStorage.setItem('tk_notes',JSON.stringify(notes));
+}
+
+function addNote(){
+notes.push({id:Date.now()+Math.random(),text:''});
+persistNotes();
+renderNotes();
+}
+
+function removeNote(id){
+notes=notes.filter(n=>n.id!==id);
+persistNotes();
+renderNotes();
+}
+
+function renderNotes(){
+$('notes').innerHTML=notes.map(n=>`
+<div class="note">
+<textarea data-id="${n.id}" placeholder="메모를 입력하세요.">${esc(n.text)}</textarea>
+<button class="action secondary" onclick="removeNote(${n.id})">삭제</button>
+</div>`).join('');
+}
+
+function calcKey(k){
+if(k==='C')calcExpr='';
+else if(k==='⌫')calcExpr=calcExpr.slice(0,-1);
+else if(k==='='){
+try{
+let expr=calcExpr.replace(/×/g,'*').replace(/÷/g,'/').replace(/−/g,'-');
+if(!/^[\d+\-*/().\s]+$/.test(expr))throw Error();
+let v=Function('"use strict";return ('+expr+')')();
+if(!Number.isFinite(v))throw Error();
+calcExpr=String(Number(v.toPrecision(12)));
+}catch{
+calcExpr='오류';
+}
+}else{
+if(calcExpr==='오류')calcExpr='';
+calcExpr+=k;
+}
+$('calcOut').textContent=calcExpr||'0';
+}
+
+function updateClock(){
+let d=new Date();
+$('clockOut').textContent=d.toLocaleTimeString('ko-KR',{hour12:false});
+$('dateOut').textContent=d.toLocaleDateString('ko-KR',{
+year:'numeric',month:'long',day:'numeric',weekday:'long'
+});
+}
+
+function makeQR(){
+let t=$('qrInput').value.trim();
+if(!t)return;
+let out=$('qrOut');
+out.innerHTML='';
+let im=document.createElement('img');
+im.alt='생성된 QR 코드';
+im.width=220;
+im.height=220;
+im.src='https://api.qrserver.com/v1/create-qr-code/?size=220x220&data='+encodeURIComponent(t);
+im.onerror=()=>out.textContent='QR 코드를 생성할 수 없습니다. 인터넷 연결을 확인하세요.';
+out.appendChild(im);
+}
+
+document.addEventListener('input',e=>{
+if(e.target.id==='memoText')
+localStorage.setItem('tk_memo',e.target.value);
+
+if(e.target.id==='board')
+localStorage.setItem('tk_board',e.target.innerText);
+
+if(e.target.matches('.note textarea')){
+let n=notes.find(x=>String(x.id)===e.target.dataset.id);
+if(n){
+n.text=e.target.value;
+persistNotes();
+}
+}
+});
+
+document.addEventListener('contextmenu',e=>{
+if(e.target.closest('#board')){
+e.preventDefault();
+let m=$('boardMenu');
+m.style.display='block';
+m.style.left=Math.max(0,Math.min(e.clientX,innerWidth-240))+'px';
+m.style.top=Math.max(0,Math.min(e.clientY,innerHeight-260))+'px';
+}
+});
+
+document.addEventListener('click',e=>{
+if(!e.target.closest('#boardMenu'))
+$('boardMenu').style.display='none';
+});
+
+for(let [id,prop,unit] of [
+['boardSize','fontSize','px'],
+['boardColor','color',''],
+['boardWeight','fontWeight',''],
+['boardAlign','textAlign','']
+]){
+$(id).addEventListener('input',e=>{
+let b=$('board');
+if(b)b.style[prop]=e.target.value+unit;
+});
+}
+</script>
+</body>
+</html>
